@@ -1,0 +1,10 @@
+module AF_PACKET_PortType {
+
+import from AF_PACKET_PortTypes all;
+
+	type port AF_PACKET_PT message {
+		inout AF_PACKET_Unitdata;
+		map param (in charstring netdev);
+	} with { extension "provider" };
+
+};

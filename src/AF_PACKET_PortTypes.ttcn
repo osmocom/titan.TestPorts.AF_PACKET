@@ -1,0 +1,7 @@
+module AF_PACKET_PortTypes {
+
+	type record AF_PACKET_Unitdata {
+		octetstring data
+	};
+
+} // AF_PACKET_PortType
