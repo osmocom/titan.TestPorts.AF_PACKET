@@ -1,0 +1,243 @@
+module Q933_Types {
+
+import from General_Types all;
+import from Osmocom_Types all;
+import from Q931_Types all;
+
+type enumerated Q933_IEI {
+	Q933_IEI_REPORT_TYPE	('01010001'B),
+	Q933_IEI_LINK_INTEGRITY	('01010011'B),
+	Q933_IEI_PVC_STATUS	('01010111'B)
+} with { variant "FIELDLENGTH(8)" };
+
+
+
+/* ITU-T Rec. Q.933 Table A.1 */
+type record Q933_STATUS_Msg {
+	Q933_ReportTypeIE	rep_type,
+	Q933_LinkIntegrityIE	link_int optional,
+	Q933_PvcStatusIE	pvc_status optional
+};
+
+/* ITU-T Rec. Q.933 Table A.2 */
+type record Q933_STATEUS_ENQ_Msg {
+	Q933_ReportTypeIE	rep_type,
+	Q933_LinkIntegrityIE	link_int
+};
+
+
+/* ITU-T Rec. Q.933 Figure A.1 */
+type record Q933_ReportTypeIE {
+	Q933_IEI		iei,
+	uint8_t			len,
+	Q933_TypeOfReport	type_of_rep
+} with {
+	variant "PRESENCE(iei = Q933_IEI_REPORT_TYPE)"
+	variant (len) "LENGTHTO(type_of_rep)"
+};
+type enumerated Q933_TypeOfReport {
+	Q993_REP_T_FULL_STATUS		('00'O),
+	Q933_REP_T_LINK_INTEG_VF_ONLY	('01'O),
+	Q933_REP_T_SINGLE_PVC_ASYNC_STS	('02'O)
+} with { variant "FIELDLENGTH(8)" };
+
+
+/* ITU-T Rec. Q.933 Figure A.2 */
+type record Q933_LinkIntegrityIE {
+	Q933_IEI		iei,
+	uint8_t			len,
+	uint8_t			send_seq_nr,
+	uint8_t			recv_seq_nr
+} with {
+	variant "PRESENCE(iei = Q933_IEI_LINK_INTEGRITY)"
+	variant (len) "LENGTHTO(send_seq_nr,recv_seq_nr)"
+};
+
+/* ITU-T Rec. Q.933 Figure A.3 */
+type record Q933_PvcStatusIE {
+	Q933_IEI		iei,
+	uint8_t			len,
+	Q933_PvcStatusRec	pvc_status
+} with {
+	variant "PRESENCE(iei = Q933_IEI_PVC_STATUS)"
+	variant (len) "LENGTHTO(pvc_status)"
+};
+type record Q933_PvcStatus {
+	BIT2			spare,
+	BIT6			dlci_high,
+	BIT1			ext1,
+	BIT4			dlci_low,
+	BIT3			spare0,
+	BIT1			ext1_,
+	BIT3			spare0_,
+	boolean			new,
+	boolean			delete,
+	boolean			active,
+	BIT1			reserved0
+};
+type set of Q933_PvcStatus Q933_PvcStatusRec;
+
+type union Q933_Payload {
+	Q933_STATUS_Msg		status,
+	Q933_STATEUS_ENQ_Msg	status_enq,
+	octetstring		other
+};
+
+type record Q933_PDU {
+	OCT1			prot_disc,
+	OCT1			call_ref,
+	Q931_MessageType	msg_type,
+	Q933_Payload		body
+} with { variant (body) "CROSSTAG(
+		status, msg_type = Q931_MSGT_STATUS;
+		status_enq, msg_type = Q931_MSGT_STATUS_ENQ;
+		other, OTHERWISE;
+	)"
+};
+
+
+external function enc_Q933_PDU(in Q933_PDU si) return octetstring
+	with { extension "prototype(convert) encode(RAW)" };
+
+external function dec_Q933_PDU(in octetstring stream) return Q933_PDU
+	with { extension "prototype(convert) decode(RAW)" };
+
+
+template (present) Q933_PDU tr_Q933_LMI_PDU := {
+	prot_disc := '08'O,
+	call_ref := '00'O,
+	msg_type := (Q931_MSGT_STATUS, Q931_MSGT_STATUS_ENQ),
+	body := ?
+}
+
+template (value) Q933_PDU ts_Q933_LMI_PDU := {
+	prot_disc := '08'O,
+	call_ref := '00'O,
+	msg_type := -,
+	body := -
+}
+
+template (present) Q933_PDU tr_Q933_STATUS_ENQ(template (present) Q933_TypeOfReport rep_type := ?)
+modifies tr_Q933_LMI_PDU := {
+	msg_type := Q931_MSGT_STATUS_ENQ,
+	body := {
+		status_enq := {
+			rep_type := tr_Q933_RepTypeIE(rep_type),
+			link_int := ?
+		}
+	}
+}
+
+template (value) Q933_PDU ts_Q933_STATUS_ENQ(template (value) Q933_TypeOfReport rep_type,
+					     template (value) Q933_LinkIntegrityIE link_int)
+modifies ts_Q933_LMI_PDU := {
+	msg_type := Q931_MSGT_STATUS_ENQ,
+	body := {
+		status_enq := {
+			rep_type := ts_Q933_RepTypeIE(rep_type),
+			link_int := link_int
+		}
+	}
+}
+
+template (present) Q933_PDU tr_Q933_STATUS(template (present) Q933_TypeOfReport rep_type := ?,
+					   template Q933_LinkIntegrityIE link_int := *,
+					   template Q933_PvcStatusIE pvc_sts := *)
+modifies tr_Q933_LMI_PDU := {
+	msg_type := Q931_MSGT_STATUS,
+	body := {
+		status := {
+			rep_type := tr_Q933_RepTypeIE(rep_type),
+			link_int := link_int,
+			pvc_status := pvc_sts
+		}
+	}
+}
+
+template (value) Q933_PDU ts_Q933_STATUS(template (value) Q933_TypeOfReport rep_type,
+					 template (omit) Q933_LinkIntegrityIE link_int,
+					 template (omit) Q933_PvcStatusIE pvc_sts := omit)
+modifies ts_Q933_LMI_PDU := {
+	msg_type := Q931_MSGT_STATUS,
+	body := {
+		status := {
+			rep_type := ts_Q933_RepTypeIE(rep_type),
+			link_int := link_int,
+			pvc_status := pvc_sts
+		}
+	}
+}
+
+
+template (present) Q933_LinkIntegrityIE
+tr_Q933_LinkIntIE(template (present) uint8_t send_seq_nr, template (present) uint8_t recv_seq_nr) := {
+	iei := Q933_IEI_LINK_INTEGRITY,
+	len := 2,
+	send_seq_nr := send_seq_nr,
+	recv_seq_nr := recv_seq_nr
+}
+template (value) Q933_LinkIntegrityIE
+ts_Q933_LinkIntIE(template (value) uint8_t send_seq_nr, template (value) uint8_t recv_seq_nr) := {
+	iei := Q933_IEI_LINK_INTEGRITY,
+	len := 2,
+	send_seq_nr := send_seq_nr,
+	recv_seq_nr := recv_seq_nr
+}
+
+template (present) Q933_PvcStatus
+tr_Q933_PvcStatus(integer dlci, template (present) boolean new,
+		  template (present) boolean delete, template (present) boolean active) := {
+	spare := '00'B,
+	dlci_high := substr(int2bit(dlci, 10), 0, 6),
+	ext1 := '1'B,
+	dlci_low := substr(int2bit(dlci, 10), 6, 4),
+	spare0 := '000'B,
+	ext1_ := '1'B,
+	spare0_ := '000'B,
+	new := new,
+	delete := delete,
+	active := active,
+	reserved0 := '0'B
+}
+
+template (value) Q933_PvcStatus ts_Q933_PvcStatus(integer dlci, boolean new, boolean delete, boolean active) := {
+	spare := '00'B,
+	dlci_high := substr(int2bit(dlci, 10), 0, 6),
+	ext1 := '1'B,
+	dlci_low := substr(int2bit(dlci, 10), 6, 4),
+	spare0 := '000'B,
+	ext1_ := '1'B,
+	spare0_ := '000'B,
+	new := new,
+	delete := delete,
+	active := active,
+	reserved0 := '0'B
+}
+
+template (present) Q933_PvcStatusIE tr_Q933_PvcStatusIE(template (present) Q933_PvcStatusRec srec) := {
+	iei := Q933_IEI_PVC_STATUS,
+	len := ?,
+	pvc_status := srec
+}
+
+template (value) Q933_PvcStatusIE ts_Q933_PvcStatusIE(template (value) Q933_PvcStatusRec srec) := {
+	iei := Q933_IEI_PVC_STATUS,
+	len := 0, // overwritten
+	pvc_status := srec
+}
+
+template (present) Q933_ReportTypeIE tr_Q933_RepTypeIE(template (present) Q933_TypeOfReport rept := ?) := {
+	iei := Q933_IEI_REPORT_TYPE,
+	len := ?,
+	type_of_rep := rept
+}
+
+template (value) Q933_ReportTypeIE ts_Q933_RepTypeIE(template (value) Q933_TypeOfReport rept) := {
+	iei := Q933_IEI_REPORT_TYPE,
+	len := 0, // overwritten
+	type_of_rep := rept
+}
+
+
+
+} with { encode "RAW" };
