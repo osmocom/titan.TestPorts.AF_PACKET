@@ -1,0 +1,105 @@
+module FrameRelay_Types {
+
+import from General_Types all;
+
+/* only two-byte Address Fields of Q.922 are used in Frame Relay */
+type record FrameRelayHeader {
+	integer dlci,
+	boolean c_r,		/* command/response */
+	boolean fecn,		/* forward ECN */
+	boolean becn,		/* backward ECN */
+	boolean de		/* discard eligibility */
+};
+
+type record FrameRelayFrame {
+	FrameRelayHeader	hdr,
+	octetstring		payload
+};
+
+/* we implement manual decoder / encoder functions below, as the DLCI field is split across two
+ * octets with other fields in between, turning a "RAW" decoder output pretty unreadable */
+
+private function bit2bool(BIT1 bit) return boolean {
+	if (bit == '1'B) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
+private function bool2bit(boolean pi) return BIT1 {
+	if (pi) {
+		return '1'B;
+	} else {
+		return '0'B;
+	}
+}
+
+function dec_FrameRelayFrameHeader(in octetstring stream) return FrameRelayHeader {
+	var FrameRelayHeader frh;
+	var bitstring hdr_b := oct2bit(substr(stream, 0, 2));
+	var bitstring dlci_b := substr(hdr_b, 0, 6) & substr(hdr_b, 8, 4);
+
+	frh.dlci := bit2int(dlci_b);
+	frh.c_r := bit2bool(hdr_b[6]);
+	frh.fecn := bit2bool(hdr_b[12]);
+	frh.becn := bit2bool(hdr_b[13]);
+	frh.de := bit2bool(hdr_b[14]);
+
+	return frh;
+}
+
+function enc_FrameRelayFrameHeader(in FrameRelayHeader frh) return OCT2 {
+	var bitstring hdr_b;
+	var bitstring dlci_b := int2bit(frh.dlci, 10);
+
+	hdr_b := substr(dlci_b, 0, 6) & bool2bit(frh.c_r) & '0'B;
+	hdr_b := hdr_b & substr(dlci_b, 6, 4) & bool2bit(frh.fecn) & bool2bit(frh.becn) & bool2bit(frh.de) & '1'B;
+
+	return bit2oct(hdr_b);
+}
+
+function dec_FrameRelayFrame(in octetstring stream) return FrameRelayFrame {
+	var FrameRelayFrame fr;
+	fr.hdr := dec_FrameRelayFrameHeader(substr(stream, 0, 2));
+	fr.payload := substr(stream, 2, lengthof(stream)-2);
+
+	return fr;
+}
+
+function enc_FrameRelayFrame(in FrameRelayFrame si) return octetstring {
+	return enc_FrameRelayFrameHeader(si.hdr) & si.payload;
+}
+
+
+
+template (value) FrameRelayFrame ts_FR(integer dlci, octetstring payload, boolean c_r, boolean fecn := false, boolean becn := false, boolean de := false) := {
+	hdr := {
+		dlci := dlci,
+		c_r := c_r,
+		fecn := fecn,
+		becn := becn,
+		de := de
+	},
+	payload := payload
+}
+template (present) FrameRelayFrame tr_FR(template (present) integer dlci,
+					 template (present) octetstring payload := ?,
+					 template (present) boolean c_r := ?,
+					 template (present) boolean fecn := ?,
+					 template (present) boolean becn := ?,
+					 template (present) boolean de := ?) := {
+	hdr := {
+		dlci := dlci,
+		c_r := c_r,
+		fecn := fecn,
+		becn := becn,
+		de := de
+	},
+	payload := payload
+}
+
+
+
+
+}

@@ -1,0 +1,29 @@
+module FrameRelay_CodecPort {
+
+import from AF_PACKET_PortType all;
+import from AF_PACKET_PortTypes all;
+
+import from FrameRelay_Types all;
+
+private function AFP_to_FR(in AF_PACKET_Unitdata pin, out FrameRelayFrame pout) {
+	pout := dec_FrameRelayFrame(pin.data);
+} with { extension "prototype(fast)" }
+
+private function FR_to_AFP(in FrameRelayFrame pin, out AF_PACKET_Unitdata pout) {
+	pout.data := enc_FrameRelayFrame(pin);
+} with { extension "prototype(fast)" }
+
+
+type port FR_CODEC_PT message {
+	inout FrameRelayFrame;
+} with { extension "user AF_PACKET_PT
+	out(
+		FrameRelayFrame -> AF_PACKET_Unitdata: function(FR_to_AFP)
+		)
+	in(
+		AF_PACKET_Unitdata -> FrameRelayFrame: function(AFP_to_FR)
+		)"
+};
+
+
+}
