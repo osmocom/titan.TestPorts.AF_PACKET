@@ -1,0 +1,389 @@
+module FrameRelay_Emulation {
+
+/* Frame Relay emulation layer on top of FrameRelay_CodecPort
+ *
+ * This implements de-multiplexing between per-DLCI client components and the
+ * underlying FrameRelay_CodecPort / HLDC / AF_PACKET stack.  It also implements
+ * LMI as per ITU-T Q.933 on DLCI 0
+ */
+
+import from General_Types all;
+import from Osmocom_Types all;
+
+import from FrameRelay_CodecPort all;
+import from FrameRelay_Types all;
+import from Q933_Types all;
+
+/* Link status notification */
+type enumerated FRemu_LinkStatus {
+	FR_LINK_STS_AVAILABLE,
+	FR_LINK_STS_UNAVAILABLE
+};
+
+/* PVC status notification */
+type record FRemu_PvcStatus {
+	integer		dlci,
+	boolean		new,
+	boolean		delete,
+	boolean		active
+};
+
+/* Frame Relay Emulation notifies the user about some event */
+type union FRemu_Event {
+	FRemu_LinkStatus	link_status,
+	FRemu_PvcStatus		pvc_status
+};
+
+/* port type between FR emulation and per-DLCI components (like NS) */
+type port FRemu_PT message {
+	inout FrameRelayFrame;
+	in FRemu_Event;
+} with { extension "internal" };
+
+type port FRemu_asp_PT message {
+	inout FrameRelayFrame;
+	out FRemu_Event;
+} with { extension "internal" };
+
+/* port between FR emulation and per-DLCI client components (like NS) */ 
+type port FRemu_PROC_PT procedure {
+	inout FRemu_register, FRemu_unregister;
+} with { extension "internal" };
+signature FRemu_register(integer dlci);
+signature FRemu_unregister(integer dlci);
+
+/* FR Emulation main component/dispatcher. Exists once per FR_CODEC_PT */
+type component FR_Emulation_CT {
+	/* port towards the bottom (HDLC device) */
+	port FR_CODEC_PT	FR;
+
+	/* port towards the user[s] (PVC specific) */
+	port FRemu_PT		CLIENT;
+	port FRemu_PROC_PT	PROC;
+	var ConnectionData	ConnectionTable[1024];
+
+	var Q933em_State	q933em;
+	/* Polling verification timer */
+	timer 			T391 := 10.0;
+	/* Link integrity verification polling timer */
+	timer 			T392 := 15.0;
+};
+
+
+/* FR Emulation user/client component/dispatcher. Exists once per FR_CODEC_PT */
+type component FR_Client_CT {
+	/* message port towards the Frame Relay Emulation */
+	port FRemu_asp_PT	FR;
+	/* procedure port towards the Frame Relay Emulation */
+	port FRemu_PROC_PT	FR_PROC;
+};
+
+
+type record ConnectionData {
+	/* component refrence to the client component for the above DLCI */
+	FR_Client_CT vc_conn
+};
+
+
+type record Q933em_State {
+	/* configuration */
+	Q933em_Config cfg,
+	/* last transmitted sequence number */
+	uint8_t tx_seq_nr,
+	/* last received sequence number */
+	uint8_t last_rx_seq_nr,
+	/* error counter buckets; we use elements 0..N393 */
+	boolean err_buckets[10],
+	uint8_t err_bucket_idx,
+	/* do we currently have a 'service affecting condition (true) or not? */
+	boolean service_affecting_condition,
+	/* did we receive a "full status" in the current T391 cycle? */
+	boolean rx_status_in_cycle
+};
+
+type record Q933em_Config {
+	/* Full status (status of all PVCs) polling counter (default: 6) */
+	uint8_t N391,
+	/* Error threshold */
+	integer N392,
+	/* Monitored events count */
+	integer N393,
+	/* is the ATS the user equipment (true) or network (false) */
+	boolean ats_is_user,
+	/* optional bidirectional network procedures */
+	boolean bidirectional
+};
+
+template (value) Q933em_Config ts_Q933em_Config(boolean ats_is_user, boolean bidirectional) := {
+	N391 := 6,
+	N392 := 4,
+	N393 := 10,
+	ats_is_user := ats_is_user,
+	bidirectional := bidirectional
+};
+
+private template (value) Q933em_State ts_Q933em_State(Q933em_Config cfg) := {
+	cfg := cfg,
+	tx_seq_nr := 0,
+	last_rx_seq_nr := 0,
+	err_buckets := { true, true, true, true, true, true, true, true, true, true },
+	err_bucket_idx := 0,
+	service_affecting_condition := true,
+	rx_status_in_cycle := false
+}
+
+/* obtain the next sequence number following the one given as argument */
+private function q933_next_seq(uint8_t cur_seq) return uint8_t {
+	/* The network equipment increments the send sequence counter using modulo 256. The value zero is skipped. */
+	if (cur_seq >= 255) {
+		return 1;
+	} else {
+		return cur_seq + 1;
+	}
+}
+
+private function fill_err_bucket(boolean has_error) runs on FR_Emulation_CT {
+	var integer i, n_errors := 0;
+
+	/* add current error status to bucket */
+	q933em.err_buckets[q933em.err_bucket_idx] := has_error;
+
+	/* check if thresholds are met */
+	if (not q933em.service_affecting_condition) {
+		for (i := 0; i < q933em.cfg.N393; i := i + 1) {
+			if (q933em.err_buckets[i]) {
+				n_errors := n_errors + 1;
+			}
+		}
+		if (n_errors >= q933em.cfg.N392) {
+			q933em.service_affecting_condition := true;
+			log("Detecting service affecting condition after N392 errors during last N393 cycles");
+			/* FIXME: notify all client components */
+		}
+	} else {
+		/* if N392 consecutive 'good' cycles -> clear service_affecting_condition */
+		var integer start_idx := (q933em.err_bucket_idx + q933em.cfg.N393 - q933em.cfg.N392) mod q933em.cfg.N393;
+		var integer consecutive_good := 0;
+		for (i := 0; i < q933em.cfg.N392; i := i+1) {
+			if (q933em.err_buckets[(start_idx + i) mod q933em.cfg.N393] == false) {
+				consecutive_good := consecutive_good + 1;
+			}
+		}
+		if (consecutive_good == q933em.cfg.N392) {
+			q933em.service_affecting_condition := false;
+			log("Detecting no more service affecting condition after N392 consecutive good cycles");
+			/* FIXME: notify all client components */
+		}
+	}
+
+	/* increment index for next cycle */
+	q933em.err_bucket_idx := (q933em.err_bucket_idx + 1) mod q933em.cfg.N393;
+}
+
+/* handle incoming Link Integrity Verification IE */
+private function q933_handle_rx_link_int(Q933_LinkIntegrityIE link_int) runs on FR_Emulation_CT {
+	if (q933em.tx_seq_nr != link_int.recv_seq_nr) {
+		log("Link Integrity IE with discontiguous sequence numbers: expected=",
+		    q933em.tx_seq_nr, " received=", link_int.recv_seq_nr);
+		fill_err_bucket(true);
+		/* FIXME */
+	} else {
+		fill_err_bucket(false);
+	}
+	q933em.last_rx_seq_nr := link_int.send_seq_nr;
+}
+
+/* generate outbound Link Integrity Verification IE */
+private function q933_gen_tx_link_int() runs on FR_Emulation_CT return Q933_LinkIntegrityIE {
+	q933em.tx_seq_nr := q933_next_seq(q933em.tx_seq_nr);
+	return valueof(ts_Q933_LinkIntIE(q933em.tx_seq_nr, q933em.last_rx_seq_nr));
+}
+/* generate outbound PVC Status Record */
+private function q933_gen_pvc_status_rec() runs on FR_Emulation_CT return Q933_PvcStatusRec {
+	var Q933_PvcStatusRec ret := {};
+	var integer i;
+	for (i := 0; i < lengthof(ConnectionTable); i := i+1) {
+		if (ConnectionTable[i].vc_conn == null) {
+			continue;
+		}
+		var boolean active := not q933em.service_affecting_condition;
+		/* TODO: set new? */
+		ret := ret & {valueof(ts_Q933_PvcStatus(i, false, false, active))};
+	}
+	return ret;
+}
+
+/* transmit a Q.933 STATUS_ENQ and start T391 */
+private function q933_tx_status_enq() runs on FR_Emulation_CT {
+	var Q933_TypeOfReport rep_type := Q933_REP_T_LINK_INTEG_VF_ONLY;
+	var Q933_LinkIntegrityIE link_int := q933_gen_tx_link_int();
+
+	/* every N391 cycles, request full status and not just link integrity */
+	if ((link_int.send_seq_nr mod q933em.cfg.N391) == 0) {
+		rep_type := Q993_REP_T_FULL_STATUS;
+	}
+	/* transmit STATUS ENQUIRY */
+	q933_tx(ts_Q933_STATUS_ENQ(rep_type, q933_gen_tx_link_int()));
+	/* re-start timer */
+	q933em.rx_status_in_cycle := false;
+	T391.start;
+}
+
+/* handle an incoming Q.933 message */
+private function handle_rx_q933(Q933_PDU rx_pdu) runs on FR_Emulation_CT {
+	if (not q933em.cfg.ats_is_user or q933em.cfg.bidirectional) {
+		/* network or bi-directional */
+		select (rx_pdu) {
+		case (tr_Q933_STATUS_ENQ(Q933_REP_T_LINK_INTEG_VF_ONLY)) {
+			T392.stop;
+			q933_handle_rx_link_int(rx_pdu.body.status_enq.link_int);
+			q933_tx(ts_Q933_STATUS(Q933_REP_T_LINK_INTEG_VF_ONLY, q933_gen_tx_link_int()));
+			T392.start;
+			return;
+			}
+		case (tr_Q933_STATUS_ENQ(Q993_REP_T_FULL_STATUS)) {
+			T392.stop;
+			q933_handle_rx_link_int(rx_pdu.body.status_enq.link_int);
+			/* create response message */
+			var Q933_PvcStatusRec pvc_status_rec := q933_gen_pvc_status_rec();
+			q933_tx(ts_Q933_STATUS(Q993_REP_T_FULL_STATUS, q933_gen_tx_link_int(), ts_Q933_PvcStatusIE(pvc_status_rec)));
+			T392.start;
+			return;
+			}
+		}
+	} else if (q933em.cfg.ats_is_user or q933em.cfg.bidirectional) {
+		select (rx_pdu) {
+		case (tr_Q933_STATUS(Q933_REP_T_LINK_INTEG_VF_ONLY)) {
+			q933_handle_rx_link_int(rx_pdu.body.status.link_int);
+			q933em.rx_status_in_cycle := true;
+			return;
+			}
+		case (tr_Q933_STATUS(Q993_REP_T_FULL_STATUS)) {
+			q933_handle_rx_link_int(rx_pdu.body.status.link_int);
+			q933em.rx_status_in_cycle := true;
+			/* process inbound PVC status and dispatch to users */
+			return;
+			}
+		}
+	}
+	/* if we reach here, something unsupported was received */
+	setverdict(fail, "Unexpected Q933 received: ", rx_pdu);
+}
+
+/* Encode + Transmit a Q.933 message over DLCI 0 */
+private function q933_tx(template (value) Q933_PDU tx) runs on FR_Emulation_CT {
+	var octetstring q933_bin := enc_Q933_PDU(valueof(tx));
+	/* Add Q.921 LAPD UI frame header */
+	FR.send(ts_FR(0, '03'O & q933_bin, false));
+}
+
+
+function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
+	var FrameRelayFrame rx_fr;
+	var integer dlci;
+	var FR_Client_CT vc_conn;
+
+	q933em := valueof(ts_Q933em_State(q933_cfg));
+
+	if (q933em.cfg.ats_is_user or q933em.cfg.bidirectional) {
+		q933_tx_status_enq();
+	}
+
+	for (var integer i:= 0; i < sizeof(ConnectionTable); i := i + 1) {
+		ConnectionTable[i] := { vc_conn := null };
+	}
+
+	while (true) {
+		alt {
+		/* FR PORT */
+
+		/* Handle DLCI=0 wihh UI frame and ITU-T LMI */
+		[] FR.receive(tr_FR(0, '03*'O)) -> value rx_fr {
+			/* strip one-byte FR header */
+			var Q933_PDU rx_q933 := dec_Q933_PDU(substr(rx_fr.payload, 1, lengthof(rx_fr.payload)-1));
+			handle_rx_q933(rx_q933);
+			}
+		[] FR.receive(tr_FR(0, ?)) -> value rx_fr {
+			setverdict(fail, "Unsupported DLCI 0 frame received: ", rx_fr);
+			mtc.stop;
+			}
+		[q933em.cfg.ats_is_user or q933em.cfg.bidirectional] T391.timeout {
+			if (not q933em.rx_status_in_cycle) {
+				/* increase error count */
+				fill_err_bucket(true);
+			}
+			/* again request status; re-start timer */
+			q933_tx_status_enq();
+			}
+		[not q933em.cfg.ats_is_user or q933em.cfg.bidirectional] T392.timeout {
+			/* increase error count */
+			fill_err_bucket(true);
+			/* re-start timer */
+			T392.start;
+			}
+
+		/* Handle all other DLCIs */
+		[not q933em.service_affecting_condition] FR.receive(tr_FR(?, ?)) -> value rx_fr {
+			/* find user for DLCI; dispatch */
+			vc_conn := ConnectionTable[rx_fr.hdr.dlci].vc_conn;
+			if (vc_conn == null) {
+				log("Dropping Rx FR for unequipped user DLCI ", rx_fr.hdr.dlci);
+				repeat;
+			}
+			CLIENT.send(rx_fr) to vc_conn;
+			}
+		[q933em.service_affecting_condition] FR.receive(tr_FR(?, ?)) -> value rx_fr {
+			log("Dropping Rx FR frame while service affecting condition exists");
+			}
+
+		/* CLIENT PORT */
+
+		[not q933em.service_affecting_condition] CLIENT.receive(rx_fr) {
+			FR.send(rx_fr);
+			}
+		[q933em.service_affecting_condition] CLIENT.receive(rx_fr) {
+			log("Dropping Tx FR frame while service affecting condition exists");
+			}
+
+		/* PROCEDURE PORT */
+
+		[] PROC.getcall(FRemu_register:{?}) -> param(dlci) sender vc_conn {
+			if (ConnectionTable[dlci].vc_conn != null and ConnectionTable[dlci].vc_conn != vc_conn) {
+				setverdict(fail, "DLCI ", dlci, " already registred by ", ConnectionTable[dlci].vc_conn,
+					   " when ", vc_conn, " tries to register for it");
+				mtc.stop;
+			}
+			ConnectionTable[dlci].vc_conn := vc_conn;
+			/* optionally send async Q.933 STATUS? */
+			}
+
+		[] PROC.getcall(FRemu_unregister:{?}) -> param(dlci) sender vc_conn {
+			if (ConnectionTable[dlci].vc_conn != vc_conn) {
+				setverdict(fail, "Component ", vc_conn, " tries to unregister DLCI ", dlci,
+					   " registered by ", ConnectionTable[dlci].vc_conn);
+				mtc.stop;
+			}
+			ConnectionTable[dlci].vc_conn := null;
+			/* optionally send async Q.933 STATUS? */
+			}
+		}
+	}
+
+}
+
+
+function f_fremu_register(integer dlci) runs on FR_Client_CT {
+	FR_PROC.call(FRemu_register:{dlci}) {
+		[] FR_PROC.getreply(FRemu_register:{dlci}) {}
+	}
+}
+
+function f_fremu_unregister(integer dlci) runs on FR_Client_CT {
+	FR_PROC.call(FRemu_unregister:{dlci}) {
+		[] FR_PROC.getreply(FRemu_unregister:{dlci}) {}
+	}
+}
+
+
+
+}
