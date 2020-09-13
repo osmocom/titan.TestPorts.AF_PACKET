@@ -38,12 +38,12 @@ type union FRemu_Event {
 type port FRemu_PT message {
 	inout FrameRelayFrame;
 	in FRemu_Event;
-} with { extension "internal" };
+} with { extension "internal" }
 
 type port FRemu_asp_PT message {
 	inout FrameRelayFrame;
 	out FRemu_Event;
-} with { extension "internal" };
+} with { extension "internal" extension "provider" };
 
 /* port between FR emulation and per-DLCI client components (like NS) */ 
 type port FRemu_PROC_PT procedure {
@@ -58,7 +58,7 @@ type component FR_Emulation_CT {
 	port FR_CODEC_PT	FR;
 
 	/* port towards the user[s] (PVC specific) */
-	port FRemu_PT		CLIENT;
+	port FRemu_asp_PT	CLIENT;
 	port FRemu_PROC_PT	PROC;
 	var ConnectionData	ConnectionTable[1024];
 
@@ -73,7 +73,7 @@ type component FR_Emulation_CT {
 /* FR Emulation user/client component/dispatcher. Exists once per FR_CODEC_PT */
 type component FR_Client_CT {
 	/* message port towards the Frame Relay Emulation */
-	port FRemu_asp_PT	FR;
+	port FRemu_PT	FR;
 	/* procedure port towards the Frame Relay Emulation */
 	port FRemu_PROC_PT	FR_PROC;
 };

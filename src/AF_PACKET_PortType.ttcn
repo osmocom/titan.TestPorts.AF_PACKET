@@ -1,5 +1,11 @@
 module AF_PACKET_PortType {
 
+/* somehow TITAN insist on having this definition and a related 'system' keyword in the function
+ * which uses the map operation */
+type component af_packet {
+	port AF_PACKET_PT AF_PACKET;
+};
+
 import from AF_PACKET_PortTypes all;
 
 	type port AF_PACKET_PT message {
