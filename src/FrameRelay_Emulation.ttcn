@@ -234,7 +234,7 @@ private function q933_tx_status_enq() runs on FR_Emulation_CT {
 		rep_type := Q993_REP_T_FULL_STATUS;
 	}
 	/* transmit STATUS ENQUIRY */
-	q933_tx(ts_Q933_STATUS_ENQ(rep_type, q933_gen_tx_link_int()));
+	q933_tx(ts_Q933_STATUS_ENQ(rep_type, link_int));
 	/* re-start timer */
 	q933em.rx_status_in_cycle := false;
 	T391.start(q933em.cfg.T391);
