@@ -80,9 +80,16 @@ type component FR_Client_CT {
 
 
 type record ConnectionData {
-	/* component refrence to the client component for the above DLCI */
-	FR_Client_CT vc_conn
+	/* component reference to the client component for the above DLCI */
+	FR_Client_CT vc_conn,
+	/* was the PVC reported as active by Q.933 yet? */
+	FRemu_PvcStatus q933_status
 };
+
+
+/***********************************************************************
+ * Q.933
+ ***********************************************************************/
 
 
 type record Q933em_State {
@@ -158,7 +165,7 @@ private function fill_err_bucket(boolean has_error) runs on FR_Emulation_CT {
 		if (n_errors >= q933em.cfg.N392) {
 			q933em.service_affecting_condition := true;
 			log("Detecting service affecting condition after N392 errors during last N393 cycles");
-			/* FIXME: notify all client components */
+			notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_AVAILABLE});
 		}
 	} else {
 		/* if N392 consecutive 'good' cycles -> clear service_affecting_condition */
@@ -172,7 +179,7 @@ private function fill_err_bucket(boolean has_error) runs on FR_Emulation_CT {
 		if (consecutive_good == q933em.cfg.N392) {
 			q933em.service_affecting_condition := false;
 			log("Detecting no more service affecting condition after N392 consecutive good cycles");
-			/* FIXME: notify all client components */
+			notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_UNAVAILABLE});
 		}
 	}
 
@@ -262,12 +269,37 @@ private function handle_rx_q933(Q933_PDU rx_pdu) runs on FR_Emulation_CT {
 			q933_handle_rx_link_int(rx_pdu.body.status.link_int);
 			q933em.rx_status_in_cycle := true;
 			/* process inbound PVC status and dispatch to users */
+			q933_handle_rx_pvc_status(rx_pdu.body.status.pvc_status.pvc_status);
 			return;
 			}
 		}
 	}
 	/* if we reach here, something unsupported was received */
 	setverdict(fail, "Unexpected Q933 received: ", rx_pdu);
+}
+
+private function status_pvc2fremu(Q933_PvcStatus inp) return FRemu_PvcStatus {
+	var FRemu_PvcStatus ps := {
+		dlci := bit2int(inp.dlci_high & inp.dlci_low),
+		new := inp.new,
+		delete := inp.delete,
+		active := inp.active
+	}
+	return ps;
+}
+
+private function q933_handle_rx_pvc_status(Q933_PvcStatusRec pvc_str) runs on FR_Emulation_CT {
+	for (var integer i := 0; i < sizeof(pvc_str); i := i+1) {
+		var Q933_PvcStatus pvc_st := pvc_str[i];
+		var FRemu_PvcStatus frps := status_pvc2fremu(pvc_st);
+		var FR_Client_CT vc_conn := ConnectionTable[frps.dlci].vc_conn;
+		if (vc_conn != null) {
+			if (ConnectionTable[frps.dlci].q933_status != frps) {
+				CLIENT.send(FRemu_Event:{pvc_status:=frps}) to vc_conn;
+				ConnectionTable[frps.dlci].q933_status := frps;
+			}
+		}
+        }
 }
 
 /* Encode + Transmit a Q.933 message over DLCI 0 */
@@ -277,6 +309,23 @@ private function q933_tx(template (value) Q933_PDU tx) runs on FR_Emulation_CT {
 	FR.send(ts_FR(0, '03'O & q933_bin, false));
 }
 
+/***********************************************************************
+ * Main
+ ***********************************************************************/
+
+private function notify_client(FR_Client_CT vc_conn, template (value) FRemu_Event evt)
+runs on FR_Emulation_CT {
+	CLIENT.send(evt) to vc_conn;
+}
+
+private function notify_all_clients(template (value) FRemu_Event evt)
+runs on FR_Emulation_CT {
+	for (var integer i:= 0; i < sizeof(ConnectionTable); i := i + 1) {
+		if (ConnectionTable[i].vc_conn != null) {
+			CLIENT.send(evt) to ConnectionTable[i].vc_conn;
+		}
+	}
+}
 
 function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
 	var FrameRelayFrame rx_fr;
@@ -290,7 +339,15 @@ function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
 	}
 
 	for (var integer i:= 0; i < sizeof(ConnectionTable); i := i + 1) {
-		ConnectionTable[i] := { vc_conn := null };
+		ConnectionTable[i] := {
+			vc_conn := null,
+			q933_status := {
+				dlci := i,
+				new := false,
+				delete := false,
+				active := false
+			}
+		};
 	}
 
 	while (true) {
@@ -371,6 +428,9 @@ function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
 
 }
 
+/***********************************************************************
+ * Client convenience helper functions
+ ***********************************************************************/
 
 function f_fremu_register(integer dlci) runs on FR_Client_CT {
 	FR_PROC.call(FRemu_register:{dlci}) {
