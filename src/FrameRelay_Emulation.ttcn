@@ -64,9 +64,9 @@ type component FR_Emulation_CT {
 
 	var Q933em_State	q933em;
 	/* Polling verification timer */
-	timer 			T391 := 10.0;
+	timer 			T391;
 	/* Link integrity verification polling timer */
-	timer 			T392 := 15.0;
+	timer 			T392;
 };
 
 
@@ -115,6 +115,8 @@ type record Q933em_Config {
 	integer N392,
 	/* Monitored events count */
 	integer N393,
+	float T391,
+	float T392,
 	/* is the ATS the user equipment (true) or network (false) */
 	boolean ats_is_user,
 	/* optional bidirectional network procedures */
@@ -125,6 +127,8 @@ template (value) Q933em_Config ts_Q933em_Config(boolean ats_is_user, boolean bid
 	N391 := 6,
 	N392 := 4,
 	N393 := 10,
+	T391 := 10.0,
+	T392 := 15.0,
 	ats_is_user := ats_is_user,
 	bidirectional := bidirectional
 };
@@ -233,7 +237,7 @@ private function q933_tx_status_enq() runs on FR_Emulation_CT {
 	q933_tx(ts_Q933_STATUS_ENQ(rep_type, q933_gen_tx_link_int()));
 	/* re-start timer */
 	q933em.rx_status_in_cycle := false;
-	T391.start;
+	T391.start(q933em.cfg.T391);
 }
 
 /* handle an incoming Q.933 message */
@@ -245,7 +249,7 @@ private function handle_rx_q933(Q933_PDU rx_pdu) runs on FR_Emulation_CT {
 			T392.stop;
 			q933_handle_rx_link_int(rx_pdu.body.status_enq.link_int);
 			q933_tx(ts_Q933_STATUS(Q933_REP_T_LINK_INTEG_VF_ONLY, q933_gen_tx_link_int()));
-			T392.start;
+			T392.start(q933em.cfg.T392);
 			return;
 			}
 		case (tr_Q933_STATUS_ENQ(Q993_REP_T_FULL_STATUS)) {
@@ -254,7 +258,7 @@ private function handle_rx_q933(Q933_PDU rx_pdu) runs on FR_Emulation_CT {
 			/* create response message */
 			var Q933_PvcStatusRec pvc_status_rec := q933_gen_pvc_status_rec();
 			q933_tx(ts_Q933_STATUS(Q993_REP_T_FULL_STATUS, q933_gen_tx_link_int(), ts_Q933_PvcStatusIE(pvc_status_rec)));
-			T392.start;
+			T392.start(q933em.cfg.T392);
 			return;
 			}
 		}
@@ -376,7 +380,7 @@ function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
 			/* increase error count */
 			fill_err_bucket(true);
 			/* re-start timer */
-			T392.start;
+			T392.start(q933em.cfg.T392);
 			}
 
 		/* Handle all other DLCIs */
