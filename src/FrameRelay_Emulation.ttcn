@@ -419,6 +419,7 @@ function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
 			}
 			ConnectionTable[dlci].vc_conn := vc_conn;
 			/* optionally send async Q.933 STATUS? */
+			PROC.reply(FRemu_register:{dlci}) to vc_conn;
 			}
 
 		[] PROC.getcall(FRemu_unregister:{?}) -> param(dlci) sender vc_conn {
@@ -429,6 +430,7 @@ function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
 			}
 			ConnectionTable[dlci].vc_conn := null;
 			/* optionally send async Q.933 STATUS? */
+			PROC.reply(FRemu_unregister:{dlci}) to vc_conn;
 			}
 		}
 	}
