@@ -101,7 +101,7 @@ type record Q933em_State {
 	uint8_t last_rx_seq_nr,
 	/* error counter buckets; we use elements 0..N393 */
 	boolean err_buckets[10],
-	uint8_t err_bucket_idx,
+	integer num_cycles,
 	/* do we currently have a 'service affecting condition (true) or not? */
 	boolean service_affecting_condition,
 	/* did we receive a "full status" in the current T391 cycle? */
@@ -138,7 +138,7 @@ private template (value) Q933em_State ts_Q933em_State(Q933em_Config cfg) := {
 	tx_seq_nr := 0,
 	last_rx_seq_nr := 0,
 	err_buckets := { true, true, true, true, true, true, true, true, true, true },
-	err_bucket_idx := 0,
+	num_cycles := 0,
 	service_affecting_condition := true,
 	rx_status_in_cycle := false
 }
@@ -155,25 +155,28 @@ private function q933_next_seq(uint8_t cur_seq) return uint8_t {
 
 private function fill_err_bucket(boolean has_error) runs on FR_Emulation_CT {
 	var integer i, n_errors := 0;
+	var integer err_bucket_idx := q933em.num_cycles mod q933em.cfg.N393;
 
 	/* add current error status to bucket */
-	q933em.err_buckets[q933em.err_bucket_idx] := has_error;
+	q933em.err_buckets[err_bucket_idx] := has_error;
 
 	/* check if thresholds are met */
 	if (not q933em.service_affecting_condition) {
-		for (i := 0; i < q933em.cfg.N393; i := i + 1) {
-			if (q933em.err_buckets[i]) {
-				n_errors := n_errors + 1;
+		if (q933em.num_cycles >= q933em.cfg.N393) {
+			for (i := 0; i < q933em.cfg.N393; i := i + 1) {
+				if (q933em.err_buckets[i]) {
+					n_errors := n_errors + 1;
+				}
 			}
-		}
-		if (n_errors >= q933em.cfg.N392) {
-			q933em.service_affecting_condition := true;
-			log("Detecting service affecting condition after N392 errors during last N393 cycles");
-			notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_AVAILABLE});
+			if (n_errors >= q933em.cfg.N392) {
+				q933em.service_affecting_condition := true;
+				log("Detecting service affecting condition after N392 errors during last N393 cycles");
+				notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_UNAVAILABLE});
+			}
 		}
 	} else {
 		/* if N392 consecutive 'good' cycles -> clear service_affecting_condition */
-		var integer start_idx := (q933em.err_bucket_idx + q933em.cfg.N393 - q933em.cfg.N392) mod q933em.cfg.N393;
+		var integer start_idx := (err_bucket_idx + 1 + q933em.cfg.N393 - q933em.cfg.N392) mod q933em.cfg.N393;
 		var integer consecutive_good := 0;
 		for (i := 0; i < q933em.cfg.N392; i := i+1) {
 			if (q933em.err_buckets[(start_idx + i) mod q933em.cfg.N393] == false) {
@@ -183,12 +186,12 @@ private function fill_err_bucket(boolean has_error) runs on FR_Emulation_CT {
 		if (consecutive_good == q933em.cfg.N392) {
 			q933em.service_affecting_condition := false;
 			log("Detecting no more service affecting condition after N392 consecutive good cycles");
-			notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_UNAVAILABLE});
+			notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_AVAILABLE});
 		}
 	}
 
 	/* increment index for next cycle */
-	q933em.err_bucket_idx := (q933em.err_bucket_idx + 1) mod q933em.cfg.N393;
+	q933em.num_cycles := q933em.num_cycles + 1;
 }
 
 /* handle incoming Link Integrity Verification IE */
