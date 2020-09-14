@@ -402,10 +402,10 @@ function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
 
 		/* CLIENT PORT */
 
-		[not q933em.service_affecting_condition] CLIENT.receive(rx_fr) {
+		[not q933em.service_affecting_condition] CLIENT.receive(tr_FR(?,?)) -> value rx_fr {
 			FR.send(rx_fr);
 			}
-		[q933em.service_affecting_condition] CLIENT.receive(rx_fr) {
+		[q933em.service_affecting_condition] CLIENT.receive(tr_FR(?,?)) -> value rx_fr {
 			log("Dropping Tx FR frame while service affecting condition exists");
 			}
 
