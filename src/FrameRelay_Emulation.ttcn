@@ -34,6 +34,16 @@ type union FRemu_Event {
 	FRemu_PvcStatus		pvc_status
 };
 
+template (present) FRemu_Event tr_FRemu_PvcStatusAct(template (present) integer dlci,
+						     template (present) boolean active := ?) := {
+	pvc_status := {
+		dlci := dlci,
+		new := ?,
+		delete := false,
+		active := active
+	}
+};
+
 /* port type between FR emulation and per-DLCI components (like NS) */
 type port FRemu_PT message {
 	inout FrameRelayFrame;
