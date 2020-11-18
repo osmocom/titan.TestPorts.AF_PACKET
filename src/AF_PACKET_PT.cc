@@ -24,8 +24,6 @@
 #include <linux/if_ether.h>
 #include <linux/if.h>
 
-#include <osmocom/core/utils.h>
-
 static int devname2ifindex(const char *ifname)
 {
 	struct ifreq ifr;
