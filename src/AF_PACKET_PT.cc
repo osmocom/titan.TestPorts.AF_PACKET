@@ -118,13 +118,22 @@ void AF__PACKET__PT_PROVIDER::Handle_Fd_Event(int fd, boolean is_readable, boole
 		return;
 
 	if (is_readable) {
+		struct sockaddr_ll sll;
+		socklen_t sll_len = sizeof(sll);
 		int rc;
 
-		rc = read(fd, mRxBuf, sizeof(mRxBuf));
+		rc = recvfrom(fd, mRxBuf, sizeof(mRxBuf), 0, (struct sockaddr *)&sll, &sll_len);
 		if (rc < 0)
 			TTCN_error("Error reading from socket: %s", strerror(errno));
 		if (rc == 0)
 			TTCN_error("Dead socket: %s", strerror(errno));
+
+		/* ignore any packets that we might have received for a different interface, between
+		 * the socket() and the bind() call */
+		if (sll.sll_ifindex != mIfindex)
+			return;
+
+		/* TODO: report the other meta-data fields like sll_pkttype via the port */
 
 		incoming_message(AF__PACKET__Unitdata(OCTETSTRING(rc, mRxBuf)));
 	}
