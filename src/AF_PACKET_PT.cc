@@ -108,6 +108,8 @@ void AF__PACKET__PT_PROVIDER::set_parameter(const char *parameter_name, const ch
 			mNetdev_name = NULL;
 		}
 		mNetdev_name = strdup(parameter_value);
+	} else if (!strcmp(parameter_name, "sleep_on_enobufs")) {
+		mSleepUsOnEnobufs = atoi(parameter_value);
 	} else
 		TTCN_error("Unsupported test port parameter `%s'.", parameter_name);
 }
@@ -204,13 +206,22 @@ void AF__PACKET__PT_PROVIDER::user_stop()
 
 void AF__PACKET__PT_PROVIDER::outgoing_send(const AF__PACKET__Unitdata& send_par)
 {
-	int rc;
-
 	assert(mSocket >= 0);
 
-	rc = write(mSocket, send_par.data(), send_par.data().lengthof());
-	if (rc < send_par.data().lengthof())
-		TTCN_error("Short write on AF_PACKET socket: %s", strerror(errno));
+	while (true) {
+		int rc = write(mSocket, send_par.data(), send_par.data().lengthof());
+		if (rc == send_par.data().lengthof())
+			break;
+		if (mSleepUsOnEnobufs && rc == -1 && errno == ENOBUFS) {
+			/* This is fscking insane.  Even select() would tell us the FD
+			 * is write-able, but then we still get -ENOBUFS.  The only way
+			 * to do this os to sleep. */
+			usleep(mSleepUsOnEnobufs);
+		} else if (rc < send_par.data().lengthof()) {
+			TTCN_error("Short write on AF_PACKET socket: %s", strerror(errno));
+			break;
+		}
+	}
 }
 
 
