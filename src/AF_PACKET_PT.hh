@@ -50,6 +50,7 @@ public:
 
 private:
 	char *mNetdev_name;		/* name of the network interface */
+	bool mSleepUsOnEnobufs;		/* how many us to sleep on ENOBUFS */
 	int mIfindex;			/* interface index of the network device */
 	int mSocket;			/* socket/file descriptor of the AF_PACKET socket */
 	uint8_t mRxBuf[2048];		/* read buffer */
