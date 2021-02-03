@@ -182,6 +182,7 @@ private function fill_err_bucket(boolean has_error) runs on FR_Emulation_CT {
 				q933em.service_affecting_condition := true;
 				log("Detecting service affecting condition after N392 errors during last N393 cycles");
 				notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_UNAVAILABLE});
+				T392.stop;
 			}
 		}
 	} else {
