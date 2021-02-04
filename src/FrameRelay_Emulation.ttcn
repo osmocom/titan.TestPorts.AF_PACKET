@@ -207,7 +207,16 @@ private function fill_err_bucket(boolean has_error) runs on FR_Emulation_CT {
 
 /* handle incoming Link Integrity Verification IE */
 private function q933_handle_rx_link_int(Q933_LinkIntegrityIE link_int) runs on FR_Emulation_CT {
-	if (q933em.tx_seq_nr != link_int.recv_seq_nr) {
+	if (link_int.recv_seq_nr == 0) {
+		/* The value '0' shall never be sent by a standards-conforming implementation,
+		 * See Q.933 section A.4.2 (NOTE).  In Osmocom we use it as "magic" value to
+		 * artificially indicate a 'service affecting condition' */
+		q933em.service_affecting_condition := true;
+		log("Detecting service affecting condition after zero receive sequence number");
+		notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_UNAVAILABLE});
+		q933em.num_cycles := 0;
+		T392.stop;
+	} else if (q933em.tx_seq_nr != link_int.recv_seq_nr) {
 		log("Link Integrity IE with discontiguous sequence numbers: expected=",
 		    q933em.tx_seq_nr, " received=", link_int.recv_seq_nr);
 		fill_err_bucket(true);
