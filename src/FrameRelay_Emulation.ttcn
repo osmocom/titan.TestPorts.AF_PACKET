@@ -80,7 +80,7 @@ type component FR_Emulation_CT {
 };
 
 
-/* FR Emulation user/client component/dispatcher. Exists once per FR_CODEC_PT */
+/* FR Emulation user/client component/dispatcher. Exists once per DLC */
 type component FR_Client_CT {
 	/* message port towards the Frame Relay Emulation */
 	port FRemu_PT	FR;
@@ -198,6 +198,10 @@ private function fill_err_bucket(boolean has_error) runs on FR_Emulation_CT {
 			q933em.service_affecting_condition := false;
 			log("Detecting no more service affecting condition after N392 consecutive good cycles");
 			notify_all_clients(FRemu_Event:{link_status:=FR_LINK_STS_AVAILABLE});
+			if (not q933em.cfg.ats_is_user) {
+				/* on the network side, all DLCs are active immediately */
+				notify_all_clients_pvc_state();
+			}
 		}
 	}
 
@@ -349,7 +353,17 @@ private function notify_all_clients(template (value) FRemu_Event evt)
 runs on FR_Emulation_CT {
 	for (var integer i:= 0; i < sizeof(ConnectionTable); i := i + 1) {
 		if (ConnectionTable[i].vc_conn != null) {
-			CLIENT.send(evt) to ConnectionTable[i].vc_conn;
+			notify_client(ConnectionTable[i].vc_conn, evt);
+		}
+	}
+}
+
+private function notify_all_clients_pvc_state()
+runs on FR_Emulation_CT {
+	for (var integer i:= 0; i < sizeof(ConnectionTable); i := i + 1) {
+		if (ConnectionTable[i].vc_conn != null) {
+			notify_client(ConnectionTable[i].vc_conn,
+				      FRemu_Event:{pvc_status:=ConnectionTable[i].q933_status});
 		}
 	}
 }
@@ -437,9 +451,22 @@ function main(Q933em_Config q933_cfg) runs on FR_Emulation_CT {
 					   " when ", vc_conn, " tries to register for it");
 				mtc.stop;
 			}
-			ConnectionTable[dlci].vc_conn := vc_conn;
-			/* optionally send async Q.933 STATUS? */
+			/* on the network side, every DLC is immediately active */
+			ConnectionTable[dlci] := {
+				vc_conn := vc_conn,
+				q933_status := {
+					dlci := dlci,
+					new := true,
+					delete := false,
+					active := true
+				}
+			};
 			PROC.reply(FRemu_register:{dlci}) to vc_conn;
+			if (not q933em.cfg.ats_is_user) {
+				notify_client(vc_conn,
+					      FRemu_Event:{pvc_status:=ConnectionTable[dlci].q933_status});
+			}
+			/* optionally send async Q.933 STATUS? */
 			}
 
 		[] PROC.getcall(FRemu_unregister:{?}) -> param(dlci) sender vc_conn {
